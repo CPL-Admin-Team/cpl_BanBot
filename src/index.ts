@@ -4,6 +4,8 @@ import path from 'node:path'
 
 import { config } from './config'
 import { deploy } from './deploy'
+import { connectToMongoDB } from 'util/mongo'
+import PunishmentHandler from 'util/punishmentHandler'
 
 const client: any = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages],

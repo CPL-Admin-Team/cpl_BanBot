@@ -1,10 +1,11 @@
 import { ObjectId, Collection } from 'mongodb';
-import { getSuspensionCollection, getBanDueCollection } from './mongo';
+import { getSuspensionCollection, getBanDueCollection, getSuspDueCollection, getUserDataCollection } from './mongo';
+import { CommandInteraction } from 'discord.js';
 
 interface SuspensionDetails {
-    ends: Date | null; // Adjusted to allow null for indefinite suspensions
+    ends: Date | null; 
     tier: number;
-    decays?: Date; // Optional decay date
+    decays?: Date; 
 }
 
 interface Member {
@@ -28,16 +29,15 @@ interface SuspensionResponse {
 
 class PunishmentHandler {
     private _susp: Collection;
-    private _unsuspendDue: Collection;
     private _banDue: Collection;
     private _suspensionDue: Collection;
+    private _player: Collection;
 
     constructor() {
         this._susp = getSuspensionCollection() as Collection;
-        const { unsuspendDue, banDue, suspensionDue } = getBanDueCollection();
-        this._unsuspendDue = unsuspendDue;
-        this._banDue = banDue;
-        this._suspensionDue = suspensionDue;
+        this._suspensionDue = getSuspDueCollection() as Collection;
+        this._banDue = getBanDueCollection() as Collection;
+        this._player = getUserDataCollection() as Collection
     }
 
     private async getMember(memberId: ObjectId): Promise<Member | null> {
@@ -73,7 +73,7 @@ class PunishmentHandler {
         decayDays: number
     ): Promise<SuspensionResponse> {
         const member = await this.getMember(memberId);
-        const currentTier = member?.[category]?.tier ?? 0;
+        const currentTier = (member?.[category] as any)?.tier ?? 0;
 
         const tier = Math.min(currentTier + 1, tierIncrements.length);
         const isFinalTier = tier === tierIncrements.length;
@@ -86,6 +86,15 @@ class PunishmentHandler {
         return { tier, ends, pendingBan: isFinalTier };
     }
 
+    private calculateEndsAndDecays (increment: number, days: number) {
+        const ends = new Date()
+        let decays = new Date()
+        decays.setDate(decays.getDate() + 90)
+        ends.setDate(ends.getDate() + increment)
+
+        return { ends, decays }
+    }
+
     private async handleFixedSuspension(
         memberId: ObjectId,
         category: keyof Member,
@@ -93,26 +102,22 @@ class PunishmentHandler {
     ): Promise<SuspensionResponse> {
         const ends = new Date();
         ends.setDate(ends.getDate() + days);
-
         await this.setSuspension(memberId, category, ends, 0, null, true);
         return { tier: 0, ends, pendingBan: false };
     }
 
     async rmTier(memberId: ObjectId, category: keyof Member): Promise<number> {
         const member = await this.getMember(memberId);
-        const currentTier = member?.[category]?.tier ?? 0;
-
+        const currentTier = (member?.[category] as any)?.tier ?? 0;
         if (currentTier < 1) {
             return -1; // No tier to remove
         }
-
         await this._susp.updateOne(
             { _id: memberId },
             { $inc: { [`${category}.tier`]: -1 } }
         );
-
         const updatedMember = await this.getMember(memberId);
-        return updatedMember?.[category]?.tier ?? 0; // Return updated tier
+        return (updatedMember?.[category] as any)?.tier ?? 0; // Return updated tier
     }
 
     async addDays(memberId: ObjectId, num: number): Promise<Date | null> {
@@ -135,7 +140,6 @@ class PunishmentHandler {
             },
             { upsert: true }
         );
-
         return ends;
     }
 
@@ -156,7 +160,6 @@ class PunishmentHandler {
                 },
             }
         );
-
         return ends;
     }
 
@@ -180,10 +183,6 @@ class PunishmentHandler {
         }
     }
 
-    async unsuspendDue(memberId: ObjectId): Promise<void> {
-        await this.logDue(this._unsuspendDue, memberId);
-    }
-
     async banDue(memberId: ObjectId): Promise<void> {
         await this.logDue(this._banDue, memberId);
     }
@@ -194,7 +193,7 @@ class PunishmentHandler {
 
     private async checkDue(collection: Collection, memberId: ObjectId): Promise<boolean> {
         const result = await collection.deleteOne({ _id: memberId });
-        return result.deletedCount > 0; // Return true if the record was found and deleted
+        return result.deletedCount > 0; 
     }
 
     async isSuspensionDue(memberId: ObjectId): Promise<boolean> {
@@ -203,10 +202,6 @@ class PunishmentHandler {
 
     async isBanDue(memberId: ObjectId): Promise<boolean> {
         return await this.checkDue(this._banDue, memberId);
-    }
-
-    async isUnsuspendDue(memberId: ObjectId): Promise<boolean> {
-        return await this.checkDue(this._unsuspendDue, memberId);
     }
 
     // Punishment methods
@@ -240,6 +235,15 @@ class PunishmentHandler {
 
     async overSub(memberId: ObjectId): Promise<SuspensionResponse> {
         return this.handleFixedSuspension(memberId, 'overSub', 3);
+    }
+
+    async getUserByDiscord(discord_id: string) {
+        return this._player.findOne({ discord_id })
+    }
+
+    async getUserTier(_id: ObjectId) {
+        const suspension = await this._susp.findOne({ _id })
+        return suspension
     }
 }
 
